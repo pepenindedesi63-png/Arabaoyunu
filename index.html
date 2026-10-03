@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Araba Oyunu</title>
+<style>
+html,body{margin:0;height:100%;background:#23272e;overflow:hidden;touch-action:none;font-family:system-ui,sans-serif}
+canvas{display:block;width:100%;height:100%}
+#hud{position:fixed;top:10px;left:12px;color:#e8e6df;font-size:14px;line-height:1.5}
+.btn{position:fixed;bottom:24px;width:76px;height:76px;border-radius:50%;border:2px solid #e8e6df66;background:#ffffff14;color:#e8e6df;font-size:28px;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none}
+.btn.on{background:#ffffff33}
+#l{left:20px}#r{left:112px}#g{right:112px}#b{right:20px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div class="btn" id="l">◀</div><div class="btn" id="r">▶</div>
+<div class="btn" id="g">▲</div><div class="btn" id="b">▼</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const WORLD = 2000;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), hud = document.getElementById('hud');
+let W, H, dpr = window.devicePixelRatio || 1;
+function resize(){ W = cv.width = innerWidth * dpr; H = cv.height = innerHeight * dpr; }
+resize(); onresize = resize;
+
+// Kontroller: klavye + dokunmatik
+const keys = { l:0, r:0, g:0, b:0 };
+const map = { ArrowLeft:'l', KeyA:'l', ArrowRight:'r', KeyD:'r', ArrowUp:'g', KeyW:'g', ArrowDown:'b', KeyS:'b' };
+onkeydown = e => { if (map[e.code]) keys[map[e.code]] = 1; };
+onkeyup = e => { if (map[e.code]) keys[map[e.code]] = 0; };
+for (const k of Object.keys(keys)) {
+  const el = document.getElementById(k);
+  const set = v => { keys[k] = v; el.classList.toggle('on', !!v); };
+  el.addEventListener('pointerdown', e => { e.preventDefault(); set(1); });
+  ['pointerup','pointercancel','pointerleave'].forEach(t => el.addEventListener(t, () => set(0)));
+}
+
+// Ağ
+const SERVER = window.SERVER_URL; // APK'da gerçek sunucu adresi buraya verilecek
+const socket = typeof io !== 'undefined' ? io(SERVER) : null;
+const me = { x:1000, y:1000, a:0, v:0, hue:200 };
+const others = {};
+let myId = null;
+if (socket) {
+  socket.on('init', d => { myId = d.id; for (const id in d.players) if (id !== myId) others[id] = d.players[id]; if (d.players[myId]) me.hue = d.players[myId].hue; });
+  socket.on('join', p => { others[p.id] = p; });
+  socket.on('state', p => { const o = others[p.id]; if (o) { o.tx = p.x; o.ty = p.y; o.ta = p.a; } });
+  socket.on('leave', id => { delete others[id]; });
+  setInterval(() => socket.emit('state', { x:me.x, y:me.y, a:me.a }), 50);
+}
+
+// Sürüş
+function update(dt){
+  me.v += (keys.g * 300 - keys.b * 350) * dt;
+  me.v -= me.v * 0.8 * dt;
+  me.v = Math.max(-150, Math.min(500, me.v));
+  const steer = keys.r - keys.l;
+  me.a += steer * 2.6 * dt * Math.max(-1, Math.min(1, me.v / 150));
+  me.x = Math.max(0, Math.min(WORLD, me.x + Math.cos(me.a) * me.v * dt));
+  me.y = Math.max(0, Math.min(WORLD, me.y + Math.sin(me.a) * me.v * dt));
+  for (const id in others) { // diğer arabaları yumuşat
+    const o = others[id];
+    if (o.tx !== undefined) { o.x += (o.tx - o.x) * 0.3; o.y += (o.ty - o.y) * 0.3; o.a += (o.ta - o.a) * 0.3; }
+  }
+}
+
+function car(x, y, a, hue){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+  ctx.fillStyle = `hsl(${hue} 70% 55%)`; ctx.fillRect(-22, -11, 44, 22);
+  ctx.fillStyle = '#1a1d22'; ctx.fillRect(2, -8, 10, 16);
+  ctx.restore();
+}
+
+function draw(){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle = '#23272e'; ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(dpr,0,0,dpr, (W/2) - me.x*dpr, (H/2) - me.y*dpr);
+  ctx.strokeStyle = '#2f353e'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= WORLD; i += 100) { ctx.moveTo(i,0); ctx.lineTo(i,WORLD); ctx.moveTo(0,i); ctx.lineTo(WORLD,i); }
+  ctx.stroke();
+  ctx.strokeStyle = '#e8e6df'; ctx.lineWidth = 6; ctx.strokeRect(0, 0, WORLD, WORLD);
+  for (const id in others) car(others[id].x, others[id].y, others[id].a, others[id].hue);
+  car(me.x, me.y, me.a, me.hue);
+  hud.textContent = (socket && socket.connected ? 'Bağlı' : 'Sunucuya bağlanılamadı') + ' · Oyuncu: ' + (Object.keys(others).length + 1);
+}
+
+let last = performance.now();
+(function loop(t){ const dt = Math.min(0.05, (t - last) / 1000); last = t; update(dt); draw(); requestAnimationFrame(loop); })(last);
+</script>
+</body>
+</html>
